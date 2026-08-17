@@ -61,7 +61,7 @@ jobs:
     name: Build Linux x86_64
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Install Build Dependencies
         run: |
@@ -70,37 +70,41 @@ jobs:
 
       - name: Build ffnvcodec Headers
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/local"
           git clone --depth 1 https://git.videolan.org/git/ffmpeg/nv-codec-headers.git
           cd nv-codec-headers
-          sudo make install
+          make install PREFIX="$GITHUB_WORKSPACE/local"
           cd ..
 
       - name: Build static x264
         run: |
           git clone --depth 1 https://code.videolan.org/videolan/x264.git
           cd x264
-          ./configure --enable-static --enable-pic --disable-cli --disable-opencl
+          ./configure --prefix="$GITHUB_WORKSPACE/local" --enable-static --enable-pic --disable-cli --disable-opencl
           make -j$(nproc)
-          sudo make install
+          make install
           cd ..
 
       - name: Build static x265
         run: |
           git clone --depth 1 https://bitbucket.org/multicoreware/x265_git.git
           cd x265_git/build/linux
-          cmake -G "Unix Makefiles" -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_LIBNUMA=OFF ../../source
+          cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/local" -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_LIBNUMA=OFF ../../source
           make -j$(nproc)
-          sudo make install
+          make install
           cd ../../..
 
       - name: Build Minimal FFmpeg
         run: |
+          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/local/lib/pkgconfig:$PKG_CONFIG_PATH"
           TAG="${{ needs.check-version.outputs.ffmpeg_tag }}"
           git clone --depth 1 --branch "$TAG" https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
           cd ffmpeg-src
           ./configure \
             --pkg-config-flags="--static" \
-            --extra-cflags="-O3" \
+            --extra-cflags="-I$GITHUB_WORKSPACE/local/include -O3" \
+            --extra-ldflags="-L$GITHUB_WORKSPACE/local/lib" \
+            --extra-libs="-lstdc++ -lm -ldl" \
             --disable-shared \
             --enable-static \
             --disable-everything \
@@ -164,10 +168,10 @@ jobs:
             yasm
             pkgconf
             mingw-w64-ucrt-x86_64-toolchain
-            mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-zlib
             mingw-w64-ucrt-x86_64-libvpl
+            mingw-w64-ucrt-x86_64-x264
+            mingw-w64-ucrt-x86_64-x265
             upx
 
       - name: Build Dependencies and FFmpeg in MSYS2
@@ -186,22 +190,7 @@ jobs:
           mkdir -p /ucrt64/include/AMF
           cp -r AMF/amf/public/include/* /ucrt64/include/AMF/
 
-          # 3. static x264
-          git clone --depth 1 https://code.videolan.org/videolan/x264.git
-          cd x264
-          ./configure --prefix=/ucrt64 --enable-static --enable-pic --disable-cli --disable-opencl
-          make -j$(nproc)
-          make install
-          cd ..
-
-          # 4. static x265
-          git clone --depth 1 https://bitbucket.org/multicoreware/x265_git.git
-          cd x265_git/build/linux
-          cmake -G "Ninja" -DCMAKE_INSTALL_PREFIX=/ucrt64 -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_LIBNUMA=OFF ../../source
-          ninja install
-          cd ../../..
-
-          # 5. Build Minimal FFmpeg
+          # 3. Build Minimal FFmpeg
           TAG="${{ needs.check-version.outputs.ffmpeg_tag }}"
           git clone --depth 1 --branch "$TAG" https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
           cd ffmpeg-src
@@ -211,6 +200,7 @@ jobs:
             --pkg-config-flags="--static" \
             --extra-cflags="-O3" \
             --extra-ldflags="-static" \
+            --extra-libs="-lstdc++ -lm" \
             --disable-shared \
             --enable-static \
             --disable-everything \
@@ -263,6 +253,7 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
@@ -277,30 +268,34 @@ jobs:
 
       - name: Build static x264
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/local"
           git clone --depth 1 https://code.videolan.org/videolan/x264.git
           cd x264
-          ./configure --enable-static --enable-pic --disable-cli --disable-opencl
+          ./configure --prefix="$GITHUB_WORKSPACE/local" --enable-static --enable-pic --disable-cli --disable-opencl
           make -j$(sysctl -n hw.logicalcpu)
-          sudo make install
+          make install
           cd ..
 
       - name: Build static x265
         run: |
           git clone --depth 1 https://bitbucket.org/multicoreware/x265_git.git
           cd x265_git/build/linux
-          cmake -G "Unix Makefiles" -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_LIBNUMA=OFF ../../source
+          cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/local" -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_LIBNUMA=OFF ../../source
           make -j$(sysctl -n hw.logicalcpu)
-          sudo make install
+          make install
           cd ../../..
 
       - name: Build Minimal FFmpeg
         run: |
+          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/local/lib/pkgconfig:$PKG_CONFIG_PATH"
           TAG="${{ needs.check-version.outputs.ffmpeg_tag }}"
           git clone --depth 1 --branch "$TAG" https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
           cd ffmpeg-src
           ./configure \
             --pkg-config-flags="--static" \
-            --extra-cflags="-O3" \
+            --extra-cflags="-I$GITHUB_WORKSPACE/local/include -O3" \
+            --extra-ldflags="-L$GITHUB_WORKSPACE/local/lib" \
+            --extra-libs="-lc++ -lpthread -lm" \
             --disable-shared \
             --enable-static \
             --disable-everything \
