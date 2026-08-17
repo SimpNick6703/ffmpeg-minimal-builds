@@ -1,0 +1,370 @@
+name: Build Minimal FFmpeg
+
+on:
+  schedule:
+    - cron: '30 6 * * 0' # Weekly Sunday 12:00 PM IST (06:30 UTC)
+  workflow_dispatch:
+    inputs:
+      ffmpeg_tag:
+        description: 'Override FFmpeg tag (e.g. n7.1, n8.0). Leave blank for auto-detect.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    name: Check Latest FFmpeg Version
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      ffmpeg_tag: ${{ steps.check.outputs.ffmpeg_tag }}
+      release_tag: ${{ steps.check.outputs.release_tag }}
+    steps:
+      - name: Detect Latest Tag
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ inputs.ffmpeg_tag }}" ]; then
+            TAG="${{ inputs.ffmpeg_tag }}"
+          else
+            TAG=$(git ls-remote --tags https://git.ffmpeg.org/ffmpeg.git \
+              | grep -oP 'refs/tags/\Kn[0-9]+(\.[0-9]+)+$' \
+              | sort -V | tail -1)
+          fi
+          
+          if [ -z "$TAG" ]; then
+            echo "Failed to resolve FFmpeg tag"
+            exit 1
+          fi
+
+          RELEASE_TAG="ffmpeg-${TAG}"
+          echo "ffmpeg_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+          # Check if release already exists in this repository
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${RELEASE_TAG}")
+
+          if [ "$HTTP_STATUS" = "200" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "Release ${RELEASE_TAG} already exists. Skipping rebuild."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release ${RELEASE_TAG} needs to be built."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-linux:
+    name: Build Linux x86_64
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm yasm cmake libva-dev libdrm-dev zlib1g-dev upx-ucl pkg-config git
+
+      - name: Build ffnvcodec Headers
+        run: |
+          git clone --depth 1 https://git.videolan.org/git/ffmpeg/nv-codec-headers.git
+          cd nv-codec-headers
+          sudo make install
+          cd ..
+
+      - name: Build static x264
+        run: |
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git
+          cd x264
+          ./configure --enable-static --enable-pic --disable-cli --disable-opencl
+          make -j$(nproc)
+          sudo make install
+          cd ..
+
+      - name: Build static x265
+        run: |
+          git clone --depth 1 https://bitbucket.org/multicoreware/x265_git.git
+          cd x265_git/build/linux
+          cmake -G "Unix Makefiles" -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_LIBNUMA=OFF ../../source
+          make -j$(nproc)
+          sudo make install
+          cd ../../..
+
+      - name: Build Minimal FFmpeg
+        run: |
+          TAG="${{ needs.check-version.outputs.ffmpeg_tag }}"
+          git clone --depth 1 --branch "$TAG" https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
+          cd ffmpeg-src
+          ./configure \
+            --pkg-config-flags="--static" \
+            --extra-cflags="-O3" \
+            --disable-shared \
+            --enable-static \
+            --disable-everything \
+            --disable-doc \
+            --disable-debug \
+            --disable-network \
+            --disable-autodetect \
+            --enable-small \
+            --enable-pthreads \
+            --enable-gpl \
+            --enable-version3 \
+            --enable-zlib \
+            --enable-ffmpeg \
+            --enable-ffprobe \
+            --enable-avcodec \
+            --enable-avformat \
+            --enable-avfilter \
+            --enable-swscale \
+            --enable-swresample \
+            --enable-libx264 \
+            --enable-libx265 \
+            --enable-cuda \
+            --enable-nvenc \
+            --enable-ffnvcodec \
+            --enable-vaapi \
+            --enable-hwaccel=h264_nvdec,hevc_nvdec,h264_vaapi,hevc_vaapi \
+            --enable-filter=fps,scale,format,hwupload,null,color \
+            --enable-demuxer=mov,matroska,avi,flv,concat,lavfi \
+            --enable-muxer=mp4,null \
+            --enable-parser=h264,hevc,aac,opus,ac3 \
+            --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le \
+            --enable-encoder=libx264,libx265,h264_nvenc,hevc_nvenc,h264_vaapi,hevc_vaapi \
+            --enable-bsf=aac_adtstoasc,extract_extradata,null \
+            --enable-protocol=file,pipe
+          make -j$(nproc)
+          strip ffmpeg ffprobe
+          upx --best ffmpeg ffprobe || true
+          tar -czf ../ffmpeg-minimal-linux-x86_64.tar.gz ffmpeg ffprobe
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-minimal-linux-x86_64
+          path: ffmpeg-minimal-linux-x86_64.tar.gz
+
+  build-windows:
+    name: Build Windows x86_64
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            base-devel
+            git
+            nasm
+            yasm
+            pkgconf
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-libvpl
+            upx
+
+      - name: Build Dependencies and FFmpeg in MSYS2
+        shell: msys2 {0}
+        run: |
+          export PKG_CONFIG_PATH="/ucrt64/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+          # 1. nv-codec-headers
+          git clone --depth 1 https://git.videolan.org/git/ffmpeg/nv-codec-headers.git
+          cd nv-codec-headers
+          make install PREFIX=/ucrt64
+          cd ..
+
+          # 2. AMF Headers
+          git clone --depth 1 https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git
+          mkdir -p /ucrt64/include/AMF
+          cp -r AMF/amf/public/include/* /ucrt64/include/AMF/
+
+          # 3. static x264
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git
+          cd x264
+          ./configure --prefix=/ucrt64 --enable-static --enable-pic --disable-cli --disable-opencl
+          make -j$(nproc)
+          make install
+          cd ..
+
+          # 4. static x265
+          git clone --depth 1 https://bitbucket.org/multicoreware/x265_git.git
+          cd x265_git/build/linux
+          cmake -G "Ninja" -DCMAKE_INSTALL_PREFIX=/ucrt64 -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_LIBNUMA=OFF ../../source
+          ninja install
+          cd ../../..
+
+          # 5. Build Minimal FFmpeg
+          TAG="${{ needs.check-version.outputs.ffmpeg_tag }}"
+          git clone --depth 1 --branch "$TAG" https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
+          cd ffmpeg-src
+          ./configure \
+            --target-os=mingw64 \
+            --arch=x86_64 \
+            --pkg-config-flags="--static" \
+            --extra-cflags="-O3" \
+            --extra-ldflags="-static" \
+            --disable-shared \
+            --enable-static \
+            --disable-everything \
+            --disable-doc \
+            --disable-debug \
+            --disable-network \
+            --disable-autodetect \
+            --enable-small \
+            --enable-pthreads \
+            --enable-gpl \
+            --enable-version3 \
+            --enable-zlib \
+            --enable-ffmpeg \
+            --enable-ffprobe \
+            --enable-avcodec \
+            --enable-avformat \
+            --enable-avfilter \
+            --enable-swscale \
+            --enable-swresample \
+            --enable-libx264 \
+            --enable-libx265 \
+            --enable-nvenc \
+            --enable-ffnvcodec \
+            --enable-amf \
+            --enable-libvpl \
+            --enable-d3d11va \
+            --enable-dxva2 \
+            --enable-hwaccel=h264_nvdec,hevc_nvdec,h264_d3d11va,hevc_d3d11va,h264_dxva2,hevc_dxva2,h264_qsv,hevc_qsv \
+            --enable-filter=fps,scale,format,hwupload,null,color \
+            --enable-demuxer=mov,matroska,avi,flv,concat,lavfi \
+            --enable-muxer=mp4,null \
+            --enable-parser=h264,hevc,aac,opus,ac3 \
+            --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le \
+            --enable-encoder=libx264,libx265,h264_nvenc,hevc_nvenc,h264_amf,hevc_amf,h264_qsv,hevc_qsv \
+            --enable-bsf=aac_adtstoasc,extract_extradata,null \
+            --enable-protocol=file,pipe
+          make -j$(nproc)
+          strip ffmpeg.exe ffprobe.exe
+          upx --best ffmpeg.exe ffprobe.exe || true
+          zip ../ffmpeg-minimal-win-x86_64.zip ffmpeg.exe ffprobe.exe
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-minimal-win-x86_64
+          path: ffmpeg-minimal-win-x86_64.zip
+
+  build-macos:
+    name: Build macOS (${{ matrix.arch }})
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install Build Dependencies
+        run: |
+          brew install nasm yasm pkg-config cmake
+
+      - name: Build static x264
+        run: |
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git
+          cd x264
+          ./configure --enable-static --enable-pic --disable-cli --disable-opencl
+          make -j$(sysctl -n hw.logicalcpu)
+          sudo make install
+          cd ..
+
+      - name: Build static x265
+        run: |
+          git clone --depth 1 https://bitbucket.org/multicoreware/x265_git.git
+          cd x265_git/build/linux
+          cmake -G "Unix Makefiles" -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_LIBNUMA=OFF ../../source
+          make -j$(sysctl -n hw.logicalcpu)
+          sudo make install
+          cd ../../..
+
+      - name: Build Minimal FFmpeg
+        run: |
+          TAG="${{ needs.check-version.outputs.ffmpeg_tag }}"
+          git clone --depth 1 --branch "$TAG" https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
+          cd ffmpeg-src
+          ./configure \
+            --pkg-config-flags="--static" \
+            --extra-cflags="-O3" \
+            --disable-shared \
+            --enable-static \
+            --disable-everything \
+            --disable-doc \
+            --disable-debug \
+            --disable-network \
+            --disable-autodetect \
+            --enable-small \
+            --enable-pthreads \
+            --enable-gpl \
+            --enable-version3 \
+            --enable-zlib \
+            --enable-ffmpeg \
+            --enable-ffprobe \
+            --enable-avcodec \
+            --enable-avformat \
+            --enable-avfilter \
+            --enable-swscale \
+            --enable-swresample \
+            --enable-libx264 \
+            --enable-libx265 \
+            --enable-videotoolbox \
+            --enable-audiotoolbox \
+            --enable-hwaccel=h264_videotoolbox,hevc_videotoolbox \
+            --enable-filter=fps,scale,format,hwupload,null,color \
+            --enable-demuxer=mov,matroska,avi,flv,concat,lavfi \
+            --enable-muxer=mp4,null \
+            --enable-parser=h264,hevc,aac,opus,ac3 \
+            --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le \
+            --enable-encoder=libx264,libx265,h264_videotoolbox,hevc_videotoolbox \
+            --enable-bsf=aac_adtstoasc,extract_extradata,null \
+            --enable-protocol=file,pipe
+          make -j$(sysctl -n hw.logicalcpu)
+          strip ffmpeg ffprobe
+          tar -czf ../ffmpeg-minimal-macos-${{ matrix.arch }}.tar.gz ffmpeg ffprobe
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-minimal-macos-${{ matrix.arch }}
+          path: ffmpeg-minimal-macos-${{ matrix.arch }}.tar.gz
+
+  create-release:
+    name: Publish Release
+    needs: [check-version, build-linux, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-version.outputs.release_tag }}
+          name: Minimal FFmpeg ${{ needs.check-version.outputs.ffmpeg_tag }}
+          body: |
+            Automated minimal static build of FFmpeg `${{ needs.check-version.outputs.ffmpeg_tag }}`.
+            
+            - **Linux x86_64**: VA-API, NVENC, x264, x265
+            - **Windows x86_64**: NVENC, AMF, QSV (oneVPL), x264, x265
+            - **macOS (arm64 & x86_64)**: VideoToolbox, AudioToolbox, x264, x265
+          files: release-assets/*
+          draft: false
+          prerelease: false

@@ -1,0 +1,11 @@
+build/
+dist/
+*.tar.gz
+*.tar.xz
+*.zip
+*.log
+ffmpeg
+ffprobe
+ffmpeg.exe
+ffprobe.exe
+.DS_Store
