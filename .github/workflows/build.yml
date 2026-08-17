@@ -92,9 +92,20 @@ jobs:
           cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/local" -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_LIBNUMA=OFF ../../source
           make -j$(nproc)
           make install
-          python3 -c "import pathlib; p = pathlib.Path('x265.pc'); p.write_text(p.read_text().replace('-lgcc_s', ''))" 2>/dev/null || true
           mkdir -p "$GITHUB_WORKSPACE/local/lib/pkgconfig"
-          cp x265.pc "$GITHUB_WORKSPACE/local/lib/pkgconfig/x265.pc"
+          cat << EOF > "$GITHUB_WORKSPACE/local/lib/pkgconfig/x265.pc"
+          prefix=$GITHUB_WORKSPACE/local
+          exec_prefix=\${prefix}
+          libdir=\${exec_prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: x265
+          Description: H.265/HEVC video encoder
+          Version: 4.1
+          Libs: -L\${libdir} -lx265
+          Libs.private: -lstdc++ -lm -ldl -lpthread
+          Cflags: -I\${includedir}
+          EOF
           cd ../../..
 
       - name: Build Minimal FFmpeg
@@ -287,9 +298,20 @@ jobs:
           cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/local" -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_LIBNUMA=OFF ../../source
           make -j$(sysctl -n hw.logicalcpu)
           make install
-          python3 -c "import pathlib; p = pathlib.Path('x265.pc'); p.write_text(p.read_text().replace('-lgcc_s', ''))" 2>/dev/null || true
           mkdir -p "$GITHUB_WORKSPACE/local/lib/pkgconfig"
-          cp x265.pc "$GITHUB_WORKSPACE/local/lib/pkgconfig/x265.pc"
+          cat << EOF > "$GITHUB_WORKSPACE/local/lib/pkgconfig/x265.pc"
+          prefix=$GITHUB_WORKSPACE/local
+          exec_prefix=\${prefix}
+          libdir=\${exec_prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: x265
+          Description: H.265/HEVC video encoder
+          Version: 4.1
+          Libs: -L\${libdir} -lx265
+          Libs.private: -lc++ -lm -lpthread
+          Cflags: -I\${includedir}
+          EOF
           cd ../../..
 
       - name: Build Minimal FFmpeg
