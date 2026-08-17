@@ -152,7 +152,7 @@ jobs:
             --enable-demuxer=mov,matroska,avi,flv,concat,rawvideo \
             --enable-muxer=mp4,matroska,null,rawvideo \
             --enable-parser=h264,hevc,aac,opus,ac3 \
-            --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo \
+            --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo,wrapped_avframe \
             --enable-encoder=libx264,libx265,h264_nvenc,hevc_nvenc,h264_vaapi,hevc_vaapi,rawvideo,wrapped_avframe \
             --enable-bsf=aac_adtstoasc,extract_extradata,null \
             --enable-protocol=file,pipe
@@ -257,7 +257,7 @@ jobs:
             --enable-demuxer=mov,matroska,avi,flv,concat,rawvideo \
             --enable-muxer=mp4,matroska,null,rawvideo \
             --enable-parser=h264,hevc,aac,opus,ac3 \
-            --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo \
+            --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo,wrapped_avframe \
             --enable-encoder=libx264,libx265,h264_nvenc,hevc_nvenc,h264_amf,hevc_amf,h264_qsv,hevc_qsv,rawvideo,wrapped_avframe \
             --enable-bsf=aac_adtstoasc,extract_extradata,null \
             --enable-protocol=file,pipe
@@ -283,7 +283,7 @@ jobs:
           - arch: arm64
             os: macos-latest
           - arch: x86_64
-            os: macos-13
+            os: macos-15-intel
     runs-on: ${{ matrix.os }}
     steps:
       - name: Install Build Dependencies
@@ -363,7 +363,7 @@ jobs:
             --enable-demuxer=mov,matroska,avi,flv,concat,rawvideo \
             --enable-muxer=mp4,matroska,null,rawvideo \
             --enable-parser=h264,hevc,aac,opus,ac3 \
-            --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo \
+            --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo,wrapped_avframe \
             --enable-encoder=libx264,libx265,h264_videotoolbox,hevc_videotoolbox,rawvideo,wrapped_avframe \
             --enable-bsf=aac_adtstoasc,extract_extradata,null \
             --enable-protocol=file,pipe
