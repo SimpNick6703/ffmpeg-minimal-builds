@@ -143,6 +143,7 @@ jobs:
             --enable-libx265 \
             --enable-cuda \
             --enable-nvenc \
+            --enable-nvdec \
             --enable-ffnvcodec \
             --enable-vaapi \
             --enable-libdrm \
@@ -247,6 +248,7 @@ jobs:
             --enable-libx265 \
             --enable-cuda \
             --enable-nvenc \
+            --enable-nvdec \
             --enable-ffnvcodec \
             --enable-amf \
             --enable-libvpl \
@@ -264,7 +266,6 @@ jobs:
             --enable-protocol=file,pipe
           make -j$(nproc)
           strip ffmpeg.exe ffprobe.exe
-          upx --best ffmpeg.exe ffprobe.exe || true
           zip ../ffmpeg-minimal-win-x86_64.zip ffmpeg.exe ffprobe.exe
 
       - name: Upload Artifact
