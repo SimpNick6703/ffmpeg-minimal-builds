@@ -15,8 +15,9 @@ Automated multi-platform builds of minimal, static `ffmpeg` and `ffprobe` binari
 
 - Configured with `--disable-everything` and selective `--enable-*` flags.
 - Symbol tables stripped (`strip`).
-- Compressed with UPX (`upx --best`) on Linux and Windows.
-- Total binary size: **~12–20 MB per archive** (down from ~160 MB+ full builds).
+- Compressed with UPX (`upx --best`) on Linux.
+- Packaged as clean stripped binaries on Windows to eliminate antivirus heuristic false positives.
+- Total binary size: **~7–15 MB per archive** (down from ~140 MB+ full builds).
 
 ## Automation
 
