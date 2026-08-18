@@ -245,6 +245,7 @@ jobs:
             --enable-swresample \
             --enable-libx264 \
             --enable-libx265 \
+            --enable-cuda \
             --enable-nvenc \
             --enable-ffnvcodec \
             --enable-amf \
