@@ -2,6 +2,8 @@
 
 Automated multi-platform builds of minimal, static `ffmpeg` and `ffprobe` binaries tailored specifically for H.264 & HEVC video transcoding with hardware acceleration and audio passthrough.
 
+These builds serve as the upstream binary provider bundled inside standalone executables for [Video-Compression](https://github.com/SimpNick6703/Video-Compression).
+
 ## Target Platform Matrix
 
 | Platform | Arch | Hardware Acceleration | Software Codecs | Archive Name |
@@ -24,3 +26,7 @@ Automated multi-platform builds of minimal, static `ffmpeg` and `ffprobe` binari
 - Checks for new stable FFmpeg release tags (`n*`) every Sunday at 12:00 PM IST (06:30 UTC).
 - Automatically skips rebuilding if a GitHub Release for the current stable tag already exists.
 - Publishes pre-built archives as GitHub Release assets tagged `ffmpeg-<tag>`.
+
+## Used By
+
+- [Video-Compression](https://github.com/SimpNick6703/Video-Compression) — Preset-based video compression tool targeting Discord file size limits, embedding these minimal binaries directly into zero-dependency standalone executables.
