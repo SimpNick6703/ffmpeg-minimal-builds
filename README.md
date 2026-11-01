@@ -8,8 +8,8 @@ These builds serve as the upstream binary provider bundled inside standalone exe
 
 | Platform | Arch | Hardware Acceleration | Software Codecs | Archive Name |
 |:---|:---|:---|:---|:---|
-| **Linux** | `x86_64` | NVENC (`cuda`), VA-API | `libx264`, `libx265` | `ffmpeg-minimal-linux-x86_64.tar.gz` |
-| **Windows** | `x86_64` | NVENC, AMD AMF, Intel QSV (`libvpl`) | `libx264`, `libx265` | `ffmpeg-minimal-win-x86_64.zip` |
+| **Linux** | `x86_64` | NVENC (`cuda`, `scale_cuda`), VA-API | `libx264`, `libx265` | `ffmpeg-minimal-linux-x86_64.tar.gz` |
+| **Windows** | `x86_64` | NVENC (`cuda`, `scale_cuda`), AMD AMF, Intel QSV (`libvpl`) | `libx264`, `libx265` | `ffmpeg-minimal-win-x86_64.zip` |
 | **macOS** | `arm64` | Apple VideoToolbox | `libx264`, `libx265` | `ffmpeg-minimal-macos-arm64.tar.gz` |
 | **macOS** | `x86_64` | Apple VideoToolbox | `libx264`, `libx265` | `ffmpeg-minimal-macos-x86_64.tar.gz` |
 
@@ -30,3 +30,8 @@ These builds serve as the upstream binary provider bundled inside standalone exe
 ## Used By
 
 - [Video-Compression](https://github.com/SimpNick6703/Video-Compression) — Preset-based video compression tool targeting Discord file size limits, embedding these minimal binaries directly into zero-dependency standalone executables.
+
+## License
+
+The build scripts and resulting prebuilt `ffmpeg` and `ffprobe` binaries (compiled with `--enable-gpl --enable-version3 --enable-libx264 --enable-libx265`) are distributed under the **GPL-3.0-or-later** license. See [LICENSE](LICENSE) for details.
+
