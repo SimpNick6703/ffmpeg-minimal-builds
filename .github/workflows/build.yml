@@ -385,6 +385,7 @@ jobs:
   create-release:
     name: Publish Release
     needs: [check-version, build-linux, build-windows, build-macos]
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
