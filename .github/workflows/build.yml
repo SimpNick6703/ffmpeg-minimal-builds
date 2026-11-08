@@ -9,6 +9,10 @@ on:
         description: 'Override FFmpeg tag (e.g. n7.1, n8.0). Leave blank for auto-detect.'
         required: false
         type: string
+      release_revision:
+        description: 'Optional revision (e.g. r3). Leave blank to use the next free revision automatically.'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -21,41 +25,69 @@ jobs:
       should_build: ${{ steps.check.outputs.should_build }}
       ffmpeg_tag: ${{ steps.check.outputs.ffmpeg_tag }}
       release_tag: ${{ steps.check.outputs.release_tag }}
+      release_name: ${{ steps.check.outputs.release_name }}
     steps:
       - name: Detect Latest Tag
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          TAG_INPUT: ${{ inputs.ffmpeg_tag }}
+          REV: ${{ inputs.release_revision }}
         run: |
-          if [ -n "${{ inputs.ffmpeg_tag }}" ]; then
-            TAG="${{ inputs.ffmpeg_tag }}"
+          set -euo pipefail
+
+          if [ -n "$TAG_INPUT" ]; then
+            TAG="$TAG_INPUT"
           else
             TAG=$(git ls-remote --tags https://git.ffmpeg.org/ffmpeg.git \
               | grep -oP 'refs/tags/\Kn[0-9]+(\.[0-9]+)+$' \
               | sort -V | tail -1)
           fi
-          
           if [ -z "$TAG" ]; then
-            echo "Failed to resolve FFmpeg tag"
+            echo "::error::Failed to resolve FFmpeg tag"
+            exit 1
+          fi
+          if [ -n "$REV" ] && ! [[ "$REV" =~ ^r[0-9]+$ ]]; then
+            echo "::error::release_revision must look like r2, r3, ... (got '$REV')"
             exit 1
           fi
 
-          RELEASE_TAG="ffmpeg-${TAG}"
+          # Existing releases of this FFmpeg version: ffmpeg-<tag> and ffmpeg-<tag>-r<N>
+          BASE="ffmpeg-${TAG}"
+          BASE_RE=$(printf '%s' "$BASE" | sed 's/[.]/[.]/g')
+          EXISTING=$(gh api "repos/${REPO}/releases" --paginate --jq '.[].tag_name' \
+            | grep -E "^${BASE_RE}(-r[0-9]+)?$" || true)
+
+          SHOULD_BUILD=true
+          if [ "$EVENT" = "schedule" ]; then
+            # Scheduled runs only publish FFmpeg versions that were never released.
+            RELEASE_TAG="$BASE"
+            if [ -n "$EXISTING" ]; then
+              echo "FFmpeg ${TAG} is already released. Skipping rebuild."
+              SHOULD_BUILD=false
+            fi
+          elif [ -n "$REV" ]; then
+            RELEASE_TAG="${BASE}-${REV}"
+            if printf '%s\n' "$EXISTING" | grep -qx "$RELEASE_TAG"; then
+              echo "::error::${RELEASE_TAG} already exists. Use a higher revision or leave it blank."
+              exit 1
+            fi
+          elif [ -z "$EXISTING" ]; then
+            RELEASE_TAG="$BASE"
+          else
+            # Manual rebuild of a released version: next free revision (base counts as r1).
+            LAST=$(printf '%s\n' "$EXISTING" | sed -nE 's/.*-r([0-9]+)$/\1/p' | sort -n | tail -1)
+            RELEASE_TAG="${BASE}-r$(( ${LAST:-1} + 1 ))"
+          fi
+
+          REVISION="${RELEASE_TAG#"$BASE"}"
           echo "ffmpeg_tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-
-          # Check if release already exists in this repository
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${RELEASE_TAG}")
-
-          if [ "$HTTP_STATUS" = "200" ] && [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "Release ${RELEASE_TAG} already exists. Skipping rebuild."
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Release ${RELEASE_TAG} needs to be built."
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-          fi
+          echo "release_name=Minimal FFmpeg ${TAG}${REVISION:+ (${REVISION#-})}" >> "$GITHUB_OUTPUT"
+          echo "should_build=$SHOULD_BUILD" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${RELEASE_TAG} (build: ${SHOULD_BUILD})"
 
   build-linux:
     name: Build Linux x86_64
@@ -109,6 +141,9 @@ jobs:
           cd ../../..
 
       - name: Build Minimal FFmpeg
+        env:
+          RELEASE_TAG: ${{ needs.check-version.outputs.release_tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/local/lib/pkgconfig:$PKG_CONFIG_PATH"
           TAG="${{ needs.check-version.outputs.ffmpeg_tag }}"
@@ -156,12 +191,64 @@ jobs:
             --enable-parser=h264,hevc,aac,opus,ac3 \
             --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo,wrapped_avframe \
             --enable-encoder=libx264,libx265,h264_nvenc,hevc_nvenc,h264_vaapi,hevc_vaapi,rawvideo,wrapped_avframe,aac \
-            --enable-bsf=aac_adtstoasc,extract_extradata,null \
+            --enable-bsf=aac_adtstoasc,extract_extradata,h264_mp4toannexb,null \
             --enable-protocol=file,pipe
           make -j$(nproc)
           strip ffmpeg ffprobe
           upx --best ffmpeg ffprobe || true
-          tar -czf ../ffmpeg-minimal-linux-x86_64.tar.gz ffmpeg ffprobe
+
+          # License texts and exact source revisions (GPL corresponding source)
+          mkdir -p licenses
+          cp COPYING.GPLv3 licenses/FFmpeg-COPYING.GPLv3
+          cp COPYING.GPLv2 licenses/FFmpeg-COPYING.GPLv2
+          cp LICENSE.md licenses/FFmpeg-LICENSE.md
+          cp ../x264/COPYING licenses/x264-COPYING
+          cp ../x265_git/COPYING licenses/x265-COPYING
+          sed -n '1,/\*\//p' ../nv-codec-headers/include/ffnvcodec/nvEncodeAPI.h > licenses/nv-codec-headers-LICENSE.txt
+          {
+            echo "ffmpeg-minimal-builds ${RELEASE_TAG} (linux-x86_64)"
+            echo "Built by: ${RUN_URL}"
+            echo "Build recipe: https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+            echo "License: GPL-3.0-or-later (--enable-gpl --enable-version3); license texts in licenses/"
+            echo
+            echo "Sources:"
+            echo "  FFmpeg ${TAG}: https://github.com/FFmpeg/FFmpeg/commit/$(git rev-parse HEAD)"
+            echo "  x264: https://code.videolan.org/videolan/x264/-/commit/$(git -C ../x264 rev-parse HEAD)"
+            echo "  x265: https://bitbucket.org/multicoreware/x265_git/commits/$(git -C ../x265_git rev-parse HEAD)"
+            echo "  nv-codec-headers: https://git.videolan.org/?p=ffmpeg/nv-codec-headers.git;a=commit;h=$(git -C ../nv-codec-headers rev-parse HEAD)"
+            echo "  Ubuntu packages: $(dpkg-query -W -f='${Package} ${Version}; ' libva-dev libdrm-dev zlib1g-dev)"
+            echo
+            ./ffmpeg -hide_banner -buildconf
+          } > BUILD_INFO.txt
+          tar -czf ../ffmpeg-minimal-linux-x86_64.tar.gz ffmpeg ffprobe BUILD_INFO.txt licenses
+
+      - name: Verify Required Filters
+        working-directory: ffmpeg-src
+        run: |
+          REQUIRED="scale_cuda hwupload_cuda scale_vaapi hwupload fps"
+          FILTERS=$(./ffmpeg -hide_banner -filters)
+          MISSING=""
+          for f in $REQUIRED; do
+            if ! echo "$FILTERS" | awk -v f="$f" '$2 == f { found = 1 } END { exit !found }'; then
+              MISSING="$MISSING $f"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing required filters:$MISSING"
+            exit 1
+          fi
+          echo "All required filters present: $REQUIRED"
+          if ! ./ffmpeg -hide_banner -bsfs | tr -d '\r' | grep -qx h264_mp4toannexb; then
+            echo "::error::Missing required bitstream filter: h264_mp4toannexb"
+            exit 1
+          fi
+          {
+            echo "### Binary sizes"
+            echo "| File | Bytes |"
+            echo "|:---|---:|"
+            echo "| ffmpeg | $(stat -c%s ffmpeg) |"
+            echo "| ffprobe | $(stat -c%s ffprobe) |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -197,6 +284,9 @@ jobs:
 
       - name: Build Dependencies and FFmpeg in MSYS2
         shell: msys2 {0}
+        env:
+          RELEASE_TAG: ${{ needs.check-version.outputs.release_tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           export PKG_CONFIG_PATH="/ucrt64/lib/pkgconfig:$PKG_CONFIG_PATH"
 
@@ -257,19 +347,76 @@ jobs:
             --enable-libvpl \
             --enable-d3d11va \
             --enable-dxva2 \
-            --enable-hwaccel=h264_nvdec,hevc_nvdec,h264_d3d11va,hevc_d3d11va,h264_dxva2,hevc_dxva2,h264_qsv,hevc_qsv \
-            --enable-filter=fps,scale,format,hwupload,hwupload_cuda,hwdownload,hwmap,null,color,scale_cuda,scale_qsv,vpp_qsv,aresample,aformat,anull \
+            --enable-hwaccel=h264_nvdec,hevc_nvdec,h264_d3d11va,hevc_d3d11va,h264_dxva2,hevc_dxva2 \
+            --enable-filter=fps,scale,format,hwupload,hwupload_cuda,hwdownload,hwmap,null,color,scale_cuda,scale_qsv,vpp_qsv,vpp_amf,aresample,aformat,anull \
             --enable-indev=lavfi \
             --enable-demuxer=mov,matroska,avi,flv,concat,rawvideo \
             --enable-muxer=mp4,matroska,null,rawvideo \
             --enable-parser=h264,hevc,aac,opus,ac3 \
             --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo,wrapped_avframe \
             --enable-encoder=libx264,libx265,h264_nvenc,hevc_nvenc,h264_amf,hevc_amf,h264_qsv,hevc_qsv,rawvideo,wrapped_avframe,aac \
-            --enable-bsf=aac_adtstoasc,extract_extradata,null \
+            --enable-bsf=aac_adtstoasc,extract_extradata,h264_mp4toannexb,null \
             --enable-protocol=file,pipe
           make -j$(nproc)
           strip ffmpeg.exe ffprobe.exe
-          zip ../ffmpeg-minimal-win-x86_64.zip ffmpeg.exe ffprobe.exe
+
+          # License texts and exact source revisions (GPL corresponding source)
+          mkdir -p licenses
+          cp COPYING.GPLv3 licenses/FFmpeg-COPYING.GPLv3
+          cp COPYING.GPLv2 licenses/FFmpeg-COPYING.GPLv2
+          cp LICENSE.md licenses/FFmpeg-LICENSE.md
+          sed -n '1,/\*\//p' ../nv-codec-headers/include/ffnvcodec/nvEncodeAPI.h > licenses/nv-codec-headers-LICENSE.txt
+          cp ../AMF/LICENSE.txt licenses/AMF-LICENSE.txt
+          for pkg in x264 x265 libvpl zlib; do
+            for f in /ucrt64/share/licenses/"$pkg"/*; do
+              if [ -f "$f" ]; then cp "$f" "licenses/${pkg}-$(basename "$f")"; fi
+            done
+          done
+          {
+            echo "ffmpeg-minimal-builds ${RELEASE_TAG} (win-x86_64)"
+            echo "Built by: ${RUN_URL}"
+            echo "Build recipe: https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+            echo "License: GPL-3.0-or-later (--enable-gpl --enable-version3); license texts in licenses/"
+            echo
+            echo "Sources:"
+            echo "  FFmpeg ${TAG}: https://github.com/FFmpeg/FFmpeg/commit/$(git rev-parse HEAD)"
+            echo "  nv-codec-headers: https://git.videolan.org/?p=ffmpeg/nv-codec-headers.git;a=commit;h=$(git -C ../nv-codec-headers rev-parse HEAD)"
+            echo "  AMF headers: https://github.com/GPUOpen-LibrariesAndSDKs/AMF/commit/$(git -C ../AMF rev-parse HEAD)"
+            echo "  MSYS2 UCRT64 packages (sources: https://github.com/msys2/MINGW-packages, https://repo.msys2.org/mingw/sources/):"
+            pacman -Q mingw-w64-ucrt-x86_64-x264 mingw-w64-ucrt-x86_64-x265 mingw-w64-ucrt-x86_64-libvpl mingw-w64-ucrt-x86_64-zlib | sed 's/^/    /'
+            echo
+            ./ffmpeg.exe -hide_banner -buildconf
+          } > BUILD_INFO.txt
+          zip -r ../ffmpeg-minimal-win-x86_64.zip ffmpeg.exe ffprobe.exe BUILD_INFO.txt licenses
+
+      - name: Verify Required Filters
+        shell: msys2 {0}
+        working-directory: ffmpeg-src
+        run: |
+          REQUIRED="scale_cuda hwupload_cuda vpp_amf vpp_qsv hwmap hwupload fps"
+          FILTERS=$(./ffmpeg.exe -hide_banner -filters)
+          MISSING=""
+          for f in $REQUIRED; do
+            if ! echo "$FILTERS" | awk -v f="$f" '$2 == f { found = 1 } END { exit !found }'; then
+              MISSING="$MISSING $f"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing required filters:$MISSING"
+            exit 1
+          fi
+          echo "All required filters present: $REQUIRED"
+          if ! ./ffmpeg.exe -hide_banner -bsfs | tr -d '\r' | grep -qx h264_mp4toannexb; then
+            echo "::error::Missing required bitstream filter: h264_mp4toannexb"
+            exit 1
+          fi
+          {
+            echo "### Binary sizes"
+            echo "| File | Bytes |"
+            echo "|:---|---:|"
+            echo "| ffmpeg.exe | $(stat -c%s ffmpeg.exe) |"
+            echo "| ffprobe.exe | $(stat -c%s ffprobe.exe) |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -328,6 +475,9 @@ jobs:
           cd ../../..
 
       - name: Build Minimal FFmpeg
+        env:
+          RELEASE_TAG: ${{ needs.check-version.outputs.release_tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/local/lib/pkgconfig:$PKG_CONFIG_PATH"
           TAG="${{ needs.check-version.outputs.ffmpeg_tag }}"
@@ -363,18 +513,67 @@ jobs:
             --enable-videotoolbox \
             --enable-audiotoolbox \
             --enable-hwaccel=h264_videotoolbox,hevc_videotoolbox \
-            --enable-filter=fps,scale,format,hwupload,hwdownload,hwmap,null,color,aresample,aformat,anull \
+            --enable-filter=fps,scale,format,hwupload,hwdownload,hwmap,null,color,scale_vt,aresample,aformat,anull \
             --enable-indev=lavfi \
             --enable-demuxer=mov,matroska,avi,flv,concat,rawvideo \
             --enable-muxer=mp4,matroska,null,rawvideo \
             --enable-parser=h264,hevc,aac,opus,ac3 \
             --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo,wrapped_avframe \
             --enable-encoder=libx264,libx265,h264_videotoolbox,hevc_videotoolbox,rawvideo,wrapped_avframe,aac \
-            --enable-bsf=aac_adtstoasc,extract_extradata,null \
+            --enable-bsf=aac_adtstoasc,extract_extradata,h264_mp4toannexb,null \
             --enable-protocol=file,pipe
           make -j$(sysctl -n hw.logicalcpu)
           strip ffmpeg ffprobe
-          tar -czf ../ffmpeg-minimal-macos-${{ matrix.arch }}.tar.gz ffmpeg ffprobe
+
+          # License texts and exact source revisions (GPL corresponding source)
+          mkdir -p licenses
+          cp COPYING.GPLv3 licenses/FFmpeg-COPYING.GPLv3
+          cp COPYING.GPLv2 licenses/FFmpeg-COPYING.GPLv2
+          cp LICENSE.md licenses/FFmpeg-LICENSE.md
+          cp ../x264/COPYING licenses/x264-COPYING
+          cp ../x265_git/COPYING licenses/x265-COPYING
+          {
+            echo "ffmpeg-minimal-builds ${RELEASE_TAG} (macos-${{ matrix.arch }})"
+            echo "Built by: ${RUN_URL}"
+            echo "Build recipe: https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+            echo "License: GPL-3.0-or-later (--enable-gpl --enable-version3); license texts in licenses/"
+            echo
+            echo "Sources:"
+            echo "  FFmpeg ${TAG}: https://github.com/FFmpeg/FFmpeg/commit/$(git rev-parse HEAD)"
+            echo "  x264: https://code.videolan.org/videolan/x264/-/commit/$(git -C ../x264 rev-parse HEAD)"
+            echo "  x265: https://bitbucket.org/multicoreware/x265_git/commits/$(git -C ../x265_git rev-parse HEAD)"
+            echo
+            ./ffmpeg -hide_banner -buildconf
+          } > BUILD_INFO.txt
+          tar -czf ../ffmpeg-minimal-macos-${{ matrix.arch }}.tar.gz ffmpeg ffprobe BUILD_INFO.txt licenses
+
+      - name: Verify Required Filters
+        working-directory: ffmpeg-src
+        run: |
+          REQUIRED="scale_vt hwupload fps"
+          FILTERS=$(./ffmpeg -hide_banner -filters)
+          MISSING=""
+          for f in $REQUIRED; do
+            if ! echo "$FILTERS" | awk -v f="$f" '$2 == f { found = 1 } END { exit !found }'; then
+              MISSING="$MISSING $f"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing required filters:$MISSING"
+            exit 1
+          fi
+          echo "All required filters present: $REQUIRED"
+          if ! ./ffmpeg -hide_banner -bsfs | tr -d '\r' | grep -qx h264_mp4toannexb; then
+            echo "::error::Missing required bitstream filter: h264_mp4toannexb"
+            exit 1
+          fi
+          {
+            echo "### Binary sizes"
+            echo "| File | Bytes |"
+            echo "|:---|---:|"
+            echo "| ffmpeg | $(stat -f%z ffmpeg) |"
+            echo "| ffprobe | $(stat -f%z ffprobe) |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -398,13 +597,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check-version.outputs.release_tag }}
-          name: Minimal FFmpeg ${{ needs.check-version.outputs.ffmpeg_tag }}
+          name: ${{ needs.check-version.outputs.release_name }}
           body: |
             Automated minimal static build of FFmpeg `${{ needs.check-version.outputs.ffmpeg_tag }}`.
             
-            - **Linux x86_64**: VA-API, NVENC, x264, x265
-            - **Windows x86_64**: NVENC, AMF, QSV (oneVPL), x264, x265
-            - **macOS (arm64 & x86_64)**: VideoToolbox, AudioToolbox, x264, x265
+            - **Linux x86_64**: VA-API + `scale_vaapi`, NVENC + `scale_cuda`, x264, x265
+            - **Windows x86_64**: NVENC + `scale_cuda`, AMF + `vpp_amf`, QSV (oneVPL) + `vpp_qsv`, x264, x265
+            - **macOS (arm64 & x86_64)**: VideoToolbox + `scale_vt`, AudioToolbox, x264, x265
           files: release-assets/*
           draft: false
           prerelease: false
