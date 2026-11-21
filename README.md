@@ -40,7 +40,7 @@ Every build can decode AV1 sources (output stays H.264 or HEVC): software decodi
 - Symbol tables stripped (`strip`).
 - Compressed with UPX (`upx --best`) on Linux.
 - Packaged as clean stripped binaries on Windows to eliminate antivirus heuristic false positives.
-- Total binary size: **~7–15 MB per archive** (down from ~140 MB+ full builds).
+- Total binary size: **~9–18 MB per archive** (down from ~140 MB+ full builds).
 
 ## Automation
 
@@ -57,7 +57,7 @@ Every build can decode AV1 sources (output stays H.264 or HEVC): software decodi
 
 ## License
 
-The build scripts and resulting prebuilt `ffmpeg` and `ffprobe` binaries (compiled with `--enable-gpl --enable-version3 --enable-libx264 --enable-libx265`) are distributed under the **GPL-3.0-or-later** license. See [LICENSE](LICENSE) for details.
+The build scripts and resulting prebuilt `ffmpeg` and `ffprobe` binaries (compiled with `--enable-gpl --enable-version3 --enable-libx264 --enable-libx265 --enable-libzimg --enable-libdav1d`) are distributed under the **GPL-3.0-or-later** license. See [LICENSE](LICENSE) for details.
 
 No proprietary code is compiled in: the builds do not use `--enable-nonfree`, CUDA filters are compiled with clang (`--enable-cuda-llvm`) instead of the NVIDIA CUDA toolkit, and GPU vendor runtimes (NVIDIA, AMD, Intel drivers) are only loaded from the system at run time.
 
