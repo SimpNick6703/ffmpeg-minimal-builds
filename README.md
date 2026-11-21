@@ -15,10 +15,20 @@ These builds serve as the upstream binary provider bundled inside standalone exe
 
 | Platform | Arch | Hardware Acceleration | Software Codecs | Archive Name |
 |:---|:---|:---|:---|:---|
-| **Linux** | `x86_64` | NVENC (`cuda`, `scale_cuda`), VA-API (`scale_vaapi`) | `libx264`, `libx265` | `ffmpeg-minimal-linux-x86_64.tar.gz` |
+| **Linux** | `x86_64` | NVENC (`cuda`, `scale_cuda`), VA-API (`scale_vaapi`, `tonemap_vaapi`) | `libx264`, `libx265` | `ffmpeg-minimal-linux-x86_64.tar.gz` |
 | **Windows** | `x86_64` | NVENC (`cuda`, `scale_cuda`), AMD AMF (`vpp_amf`), Intel QSV (`libvpl`, `vpp_qsv`) | `libx264`, `libx265` | `ffmpeg-minimal-win-x86_64.zip` |
 | **macOS** | `arm64` | Apple VideoToolbox (`scale_vt`) | `libx264`, `libx265` | `ffmpeg-minimal-macos-arm64.tar.gz` |
 | **macOS** | `x86_64` | Apple VideoToolbox (`scale_vt`) | `libx264`, `libx265` | `ffmpeg-minimal-macos-x86_64.tar.gz` |
+
+## HDR to SDR Tone Mapping
+
+Every build includes `zscale` (from [zimg](https://github.com/sekrit-twc/zimg), linked statically) and `tonemap`, so HDR10 and HLG sources can be converted to SDR BT.709 on the CPU with any encoder. Example for HDR10 (PQ); for HLG, drop `:npl=100`:
+
+```bash
+ffmpeg -i hdr.mp4 -vf "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p" -c:v libx265 sdr.mp4
+```
+
+Linux also includes `tonemap_vaapi` for GPU tone mapping on VA-API drivers that support it (Intel; HDR10 input only). On Windows, Intel QSV can tone map with the existing `vpp_qsv` filter (`vpp_qsv=tonemap=1`).
 
 ## Size Optimization
 
@@ -51,7 +61,7 @@ No proprietary code is compiled in: the builds do not use `--enable-nonfree`, CU
 
 Every release archive contains:
 
-- `BUILD_INFO.txt`: the exact source revision of each component (FFmpeg tag and commit, x264, x265, nv-codec-headers, AMF headers, and the MSYS2 package versions used on Windows), the workflow run that produced the binaries, and the full FFmpeg configuration.
+- `BUILD_INFO.txt`: the exact source revision of each component (FFmpeg tag and commit, x264, x265, zimg, nv-codec-headers, AMF headers, and the MSYS2 package versions used on Windows), the workflow run that produced the binaries, and the full FFmpeg configuration.
 - `licenses/`: the license texts of FFmpeg and of every component compiled into the binaries.
 
 The source for each listed revision is available from the linked upstream repositories. The build recipe is [`.github/workflows/build.yml`](.github/workflows/build.yml) at the commit recorded in `BUILD_INFO.txt`.
