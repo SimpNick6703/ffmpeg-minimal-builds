@@ -98,7 +98,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm yasm cmake libva-dev libdrm-dev zlib1g-dev upx-ucl pkg-config git clang
+          sudo apt-get install -y nasm yasm cmake libva-dev libdrm-dev zlib1g-dev upx-ucl pkg-config git clang autoconf automake libtool meson ninja-build
 
       - name: Build ffnvcodec Headers
         run: |
@@ -139,6 +139,25 @@ jobs:
           Cflags: -I\${includedir}
           EOF
           cd ../../..
+
+      - name: Build static zimg
+        run: |
+          git clone --depth 1 --recursive https://github.com/sekrit-twc/zimg.git
+          cd zimg
+          ./autogen.sh
+          ./configure --prefix="$GITHUB_WORKSPACE/local" --enable-static --disable-shared --with-pic
+          make -j$(nproc)
+          make install
+          cd ..
+
+      - name: Build static dav1d
+        run: |
+          git clone --depth 1 https://code.videolan.org/videolan/dav1d.git
+          cd dav1d
+          meson setup build --prefix="$GITHUB_WORKSPACE/local" --libdir=lib --buildtype=release \
+            --default-library=static -Denable_tools=false -Denable_tests=false
+          ninja -C build install
+          cd ..
 
       - name: Build Minimal FFmpeg
         env:
@@ -183,13 +202,15 @@ jobs:
             --enable-cuda-llvm \
             --enable-vaapi \
             --enable-libdrm \
-            --enable-hwaccel=h264_nvdec,hevc_nvdec,h264_vaapi,hevc_vaapi \
-            --enable-filter=fps,scale,format,hwupload,hwupload_cuda,hwdownload,hwmap,null,color,scale_cuda,scale_vaapi,aresample,aformat,anull \
+            --enable-libzimg \
+            --enable-libdav1d \
+            --enable-hwaccel=h264_nvdec,hevc_nvdec,av1_nvdec,h264_vaapi,hevc_vaapi,av1_vaapi \
+            --enable-filter=fps,scale,format,hwupload,hwupload_cuda,hwdownload,hwmap,null,color,scale_cuda,scale_vaapi,tonemap_vaapi,zscale,tonemap,aresample,aformat,anull \
             --enable-indev=lavfi \
             --enable-demuxer=mov,matroska,avi,flv,concat,rawvideo \
             --enable-muxer=mp4,matroska,null,rawvideo \
-            --enable-parser=h264,hevc,aac,opus,ac3 \
-            --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo,wrapped_avframe \
+            --enable-parser=h264,hevc,av1,aac,opus,ac3 \
+            --enable-decoder=h264,hevc,av1,libdav1d,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo,wrapped_avframe \
             --enable-encoder=libx264,libx265,h264_nvenc,hevc_nvenc,h264_vaapi,hevc_vaapi,rawvideo,wrapped_avframe,aac \
             --enable-bsf=aac_adtstoasc,extract_extradata,h264_mp4toannexb,null \
             --enable-protocol=file,pipe
@@ -204,6 +225,9 @@ jobs:
           cp LICENSE.md licenses/FFmpeg-LICENSE.md
           cp ../x264/COPYING licenses/x264-COPYING
           cp ../x265_git/COPYING licenses/x265-COPYING
+          cp ../zimg/COPYING licenses/zimg-COPYING
+          cp ../dav1d/COPYING licenses/dav1d-COPYING
+          cp ../dav1d/doc/PATENTS licenses/dav1d-PATENTS
           sed -n '1,/\*\//p' ../nv-codec-headers/include/ffnvcodec/nvEncodeAPI.h > licenses/nv-codec-headers-LICENSE.txt
           {
             echo "ffmpeg-minimal-builds ${RELEASE_TAG} (linux-x86_64)"
@@ -215,6 +239,8 @@ jobs:
             echo "  FFmpeg ${TAG}: https://github.com/FFmpeg/FFmpeg/commit/$(git rev-parse HEAD)"
             echo "  x264: https://code.videolan.org/videolan/x264/-/commit/$(git -C ../x264 rev-parse HEAD)"
             echo "  x265: https://bitbucket.org/multicoreware/x265_git/commits/$(git -C ../x265_git rev-parse HEAD)"
+            echo "  zimg: https://github.com/sekrit-twc/zimg/commit/$(git -C ../zimg rev-parse HEAD)"
+            echo "  dav1d: https://code.videolan.org/videolan/dav1d/-/commit/$(git -C ../dav1d rev-parse HEAD)"
             echo "  nv-codec-headers: https://git.videolan.org/?p=ffmpeg/nv-codec-headers.git;a=commit;h=$(git -C ../nv-codec-headers rev-parse HEAD)"
             echo "  Ubuntu packages: $(dpkg-query -W -f='${Package} ${Version}; ' libva-dev libdrm-dev zlib1g-dev)"
             echo
@@ -225,7 +251,7 @@ jobs:
       - name: Verify Required Filters
         working-directory: ffmpeg-src
         run: |
-          REQUIRED="scale_cuda hwupload_cuda scale_vaapi hwupload fps"
+          REQUIRED="scale_cuda hwupload_cuda scale_vaapi tonemap_vaapi zscale tonemap hwupload fps"
           FILTERS=$(./ffmpeg -hide_banner -filters)
           MISSING=""
           for f in $REQUIRED; do
@@ -238,6 +264,10 @@ jobs:
             exit 1
           fi
           echo "All required filters present: $REQUIRED"
+          if ! ./ffmpeg -hide_banner -decoders | tr -d '\r' | awk '$2 == "libdav1d" { f = 1 } END { exit !f }'; then
+            echo "::error::Missing required decoder: libdav1d"
+            exit 1
+          fi
           if ! ./ffmpeg -hide_banner -bsfs | tr -d '\r' | grep -qx h264_mp4toannexb; then
             echo "::error::Missing required bitstream filter: h264_mp4toannexb"
             exit 1
@@ -279,6 +309,8 @@ jobs:
             mingw-w64-ucrt-x86_64-libvpl
             mingw-w64-ucrt-x86_64-x264
             mingw-w64-ucrt-x86_64-x265
+            mingw-w64-ucrt-x86_64-zimg
+            mingw-w64-ucrt-x86_64-dav1d
             upx
             zip
 
@@ -303,7 +335,7 @@ jobs:
 
           # 3. Sanitize MSYS2 pkgconfig and libraries for pure static linkage
           sed -i 's/-lgcc_s//g; s/-lgcc//g' /ucrt64/lib/pkgconfig/*.pc || true
-          rm -f /ucrt64/lib/libx264.dll.a /ucrt64/lib/libx265.dll.a /ucrt64/lib/libvpl.dll.a /ucrt64/lib/libz.dll.a
+          rm -f /ucrt64/lib/libx264.dll.a /ucrt64/lib/libx265.dll.a /ucrt64/lib/libvpl.dll.a /ucrt64/lib/libz.dll.a /ucrt64/lib/libzimg.dll.a /ucrt64/lib/libdav1d.dll.a
 
           # 4. Build Minimal FFmpeg
           TAG="${{ needs.check-version.outputs.ffmpeg_tag }}"
@@ -345,15 +377,17 @@ jobs:
             --enable-cuda-llvm \
             --enable-amf \
             --enable-libvpl \
+            --enable-libzimg \
+            --enable-libdav1d \
             --enable-d3d11va \
             --enable-dxva2 \
-            --enable-hwaccel=h264_nvdec,hevc_nvdec,h264_d3d11va,hevc_d3d11va,h264_dxva2,hevc_dxva2 \
-            --enable-filter=fps,scale,format,hwupload,hwupload_cuda,hwdownload,hwmap,null,color,scale_cuda,scale_qsv,vpp_qsv,vpp_amf,aresample,aformat,anull \
+            --enable-hwaccel=h264_nvdec,hevc_nvdec,av1_nvdec,h264_d3d11va,hevc_d3d11va,av1_d3d11va,h264_dxva2,hevc_dxva2,av1_dxva2 \
+            --enable-filter=fps,scale,format,hwupload,hwupload_cuda,hwdownload,hwmap,null,color,scale_cuda,scale_qsv,vpp_qsv,vpp_amf,zscale,tonemap,aresample,aformat,anull \
             --enable-indev=lavfi \
             --enable-demuxer=mov,matroska,avi,flv,concat,rawvideo \
             --enable-muxer=mp4,matroska,null,rawvideo \
-            --enable-parser=h264,hevc,aac,opus,ac3 \
-            --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo,wrapped_avframe \
+            --enable-parser=h264,hevc,av1,aac,opus,ac3 \
+            --enable-decoder=h264,hevc,av1,libdav1d,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo,wrapped_avframe \
             --enable-encoder=libx264,libx265,h264_nvenc,hevc_nvenc,h264_amf,hevc_amf,h264_qsv,hevc_qsv,rawvideo,wrapped_avframe,aac \
             --enable-bsf=aac_adtstoasc,extract_extradata,h264_mp4toannexb,null \
             --enable-protocol=file,pipe
@@ -367,7 +401,7 @@ jobs:
           cp LICENSE.md licenses/FFmpeg-LICENSE.md
           sed -n '1,/\*\//p' ../nv-codec-headers/include/ffnvcodec/nvEncodeAPI.h > licenses/nv-codec-headers-LICENSE.txt
           cp ../AMF/LICENSE.txt licenses/AMF-LICENSE.txt
-          for pkg in x264 x265 libvpl zlib; do
+          for pkg in x264 x265 libvpl zlib zimg dav1d; do
             for f in /ucrt64/share/licenses/"$pkg"/*; do
               if [ -f "$f" ]; then cp "$f" "licenses/${pkg}-$(basename "$f")"; fi
             done
@@ -383,7 +417,7 @@ jobs:
             echo "  nv-codec-headers: https://git.videolan.org/?p=ffmpeg/nv-codec-headers.git;a=commit;h=$(git -C ../nv-codec-headers rev-parse HEAD)"
             echo "  AMF headers: https://github.com/GPUOpen-LibrariesAndSDKs/AMF/commit/$(git -C ../AMF rev-parse HEAD)"
             echo "  MSYS2 UCRT64 packages (sources: https://github.com/msys2/MINGW-packages, https://repo.msys2.org/mingw/sources/):"
-            pacman -Q mingw-w64-ucrt-x86_64-x264 mingw-w64-ucrt-x86_64-x265 mingw-w64-ucrt-x86_64-libvpl mingw-w64-ucrt-x86_64-zlib | sed 's/^/    /'
+            pacman -Q mingw-w64-ucrt-x86_64-x264 mingw-w64-ucrt-x86_64-x265 mingw-w64-ucrt-x86_64-libvpl mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-zimg mingw-w64-ucrt-x86_64-dav1d | sed 's/^/    /'
             echo
             ./ffmpeg.exe -hide_banner -buildconf
           } > BUILD_INFO.txt
@@ -393,7 +427,7 @@ jobs:
         shell: msys2 {0}
         working-directory: ffmpeg-src
         run: |
-          REQUIRED="scale_cuda hwupload_cuda vpp_amf vpp_qsv hwmap hwupload fps"
+          REQUIRED="scale_cuda hwupload_cuda vpp_amf vpp_qsv hwmap zscale tonemap hwupload fps"
           FILTERS=$(./ffmpeg.exe -hide_banner -filters)
           MISSING=""
           for f in $REQUIRED; do
@@ -406,6 +440,10 @@ jobs:
             exit 1
           fi
           echo "All required filters present: $REQUIRED"
+          if ! ./ffmpeg.exe -hide_banner -decoders | tr -d '\r' | awk '$2 == "libdav1d" { f = 1 } END { exit !f }'; then
+            echo "::error::Missing required decoder: libdav1d"
+            exit 1
+          fi
           if ! ./ffmpeg.exe -hide_banner -bsfs | tr -d '\r' | grep -qx h264_mp4toannexb; then
             echo "::error::Missing required bitstream filter: h264_mp4toannexb"
             exit 1
@@ -439,7 +477,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Install Build Dependencies
-        run: brew install nasm yasm pkg-config cmake
+        run: brew install nasm yasm pkg-config cmake autoconf automake libtool meson ninja
 
       - name: Build Static libx264
         run: |
@@ -473,6 +511,25 @@ jobs:
           Cflags: -I\${includedir}
           EOF
           cd ../../..
+
+      - name: Build Static zimg
+        run: |
+          git clone --depth 1 --recursive https://github.com/sekrit-twc/zimg.git
+          cd zimg
+          ./autogen.sh
+          ./configure --prefix="$GITHUB_WORKSPACE/local" --enable-static --disable-shared --with-pic
+          make -j$(sysctl -n hw.logicalcpu)
+          make install
+          cd ..
+
+      - name: Build static dav1d
+        run: |
+          git clone --depth 1 https://code.videolan.org/videolan/dav1d.git
+          cd dav1d
+          meson setup build --prefix="$GITHUB_WORKSPACE/local" --libdir=lib --buildtype=release \
+            --default-library=static -Denable_tools=false -Denable_tests=false
+          ninja -C build install
+          cd ..
 
       - name: Build Minimal FFmpeg
         env:
@@ -512,13 +569,15 @@ jobs:
             --enable-libx265 \
             --enable-videotoolbox \
             --enable-audiotoolbox \
-            --enable-hwaccel=h264_videotoolbox,hevc_videotoolbox \
-            --enable-filter=fps,scale,format,hwupload,hwdownload,hwmap,null,color,scale_vt,aresample,aformat,anull \
+            --enable-libzimg \
+            --enable-libdav1d \
+            --enable-hwaccel=h264_videotoolbox,hevc_videotoolbox,av1_videotoolbox \
+            --enable-filter=fps,scale,format,hwupload,hwdownload,hwmap,null,color,scale_vt,zscale,tonemap,aresample,aformat,anull \
             --enable-indev=lavfi \
             --enable-demuxer=mov,matroska,avi,flv,concat,rawvideo \
             --enable-muxer=mp4,matroska,null,rawvideo \
-            --enable-parser=h264,hevc,aac,opus,ac3 \
-            --enable-decoder=h264,hevc,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo,wrapped_avframe \
+            --enable-parser=h264,hevc,av1,aac,opus,ac3 \
+            --enable-decoder=h264,hevc,av1,libdav1d,vp9,mjpeg,mpeg4,aac,mp3,opus,flac,vorbis,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le,rawvideo,wrapped_avframe \
             --enable-encoder=libx264,libx265,h264_videotoolbox,hevc_videotoolbox,rawvideo,wrapped_avframe,aac \
             --enable-bsf=aac_adtstoasc,extract_extradata,h264_mp4toannexb,null \
             --enable-protocol=file,pipe
@@ -532,6 +591,9 @@ jobs:
           cp LICENSE.md licenses/FFmpeg-LICENSE.md
           cp ../x264/COPYING licenses/x264-COPYING
           cp ../x265_git/COPYING licenses/x265-COPYING
+          cp ../zimg/COPYING licenses/zimg-COPYING
+          cp ../dav1d/COPYING licenses/dav1d-COPYING
+          cp ../dav1d/doc/PATENTS licenses/dav1d-PATENTS
           {
             echo "ffmpeg-minimal-builds ${RELEASE_TAG} (macos-${{ matrix.arch }})"
             echo "Built by: ${RUN_URL}"
@@ -542,6 +604,8 @@ jobs:
             echo "  FFmpeg ${TAG}: https://github.com/FFmpeg/FFmpeg/commit/$(git rev-parse HEAD)"
             echo "  x264: https://code.videolan.org/videolan/x264/-/commit/$(git -C ../x264 rev-parse HEAD)"
             echo "  x265: https://bitbucket.org/multicoreware/x265_git/commits/$(git -C ../x265_git rev-parse HEAD)"
+            echo "  zimg: https://github.com/sekrit-twc/zimg/commit/$(git -C ../zimg rev-parse HEAD)"
+            echo "  dav1d: https://code.videolan.org/videolan/dav1d/-/commit/$(git -C ../dav1d rev-parse HEAD)"
             echo
             ./ffmpeg -hide_banner -buildconf
           } > BUILD_INFO.txt
@@ -550,7 +614,7 @@ jobs:
       - name: Verify Required Filters
         working-directory: ffmpeg-src
         run: |
-          REQUIRED="scale_vt hwupload fps"
+          REQUIRED="scale_vt zscale tonemap hwupload fps"
           FILTERS=$(./ffmpeg -hide_banner -filters)
           MISSING=""
           for f in $REQUIRED; do
@@ -563,6 +627,10 @@ jobs:
             exit 1
           fi
           echo "All required filters present: $REQUIRED"
+          if ! ./ffmpeg -hide_banner -decoders | tr -d '\r' | awk '$2 == "libdav1d" { f = 1 } END { exit !f }'; then
+            echo "::error::Missing required decoder: libdav1d"
+            exit 1
+          fi
           if ! ./ffmpeg -hide_banner -bsfs | tr -d '\r' | grep -qx h264_mp4toannexb; then
             echo "::error::Missing required bitstream filter: h264_mp4toannexb"
             exit 1
@@ -601,9 +669,9 @@ jobs:
           body: |
             Automated minimal static build of FFmpeg `${{ needs.check-version.outputs.ffmpeg_tag }}`.
             
-            - **Linux x86_64**: VA-API + `scale_vaapi`, NVENC + `scale_cuda`, x264, x265
-            - **Windows x86_64**: NVENC + `scale_cuda`, AMF + `vpp_amf`, QSV (oneVPL) + `vpp_qsv`, x264, x265
-            - **macOS (arm64 & x86_64)**: VideoToolbox + `scale_vt`, AudioToolbox, x264, x265
+            - **Linux x86_64**: VA-API + `scale_vaapi` + `tonemap_vaapi`, NVENC + `scale_cuda`, x264, x265, HDR to SDR tone mapping (`zscale` + `tonemap`), AV1 decoding (`libdav1d`, GPU AV1 decode)
+            - **Windows x86_64**: NVENC + `scale_cuda`, AMF + `vpp_amf`, QSV (oneVPL) + `vpp_qsv`, x264, x265, HDR to SDR tone mapping (`zscale` + `tonemap`), AV1 decoding (`libdav1d`, GPU AV1 decode)
+            - **macOS (arm64 & x86_64)**: VideoToolbox + `scale_vt`, AudioToolbox, x264, x265, HDR to SDR tone mapping (`zscale` + `tonemap`), AV1 decoding (`libdav1d`, GPU AV1 decode)
           files: release-assets/*
           draft: false
           prerelease: false
