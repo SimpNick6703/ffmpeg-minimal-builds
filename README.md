@@ -7,7 +7,7 @@
 [![Platform Support](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-emerald?style=flat-square)](#target-platform-matrix)
 [![Used by Video-Compression](https://img.shields.io/badge/Used%20by-Video--Compression-f59e0b?style=flat-square&logo=github)](https://github.com/SimpNick6703/Video-Compression)
 
-Automated multi-platform builds of minimal, static `ffmpeg` and `ffprobe` binaries tailored specifically for H.264 & HEVC video transcoding with hardware acceleration and audio passthrough.
+Automated multi-platform builds of minimal `ffmpeg` and `ffprobe` binaries, with the codec libraries linked statically, tailored specifically for H.264 & HEVC video transcoding with hardware acceleration and audio passthrough or AAC encoding.
 
 These builds serve as the upstream binary provider bundled inside standalone executables for [Video-Compression](https://github.com/SimpNick6703/Video-Compression).
 
@@ -19,6 +19,10 @@ These builds serve as the upstream binary provider bundled inside standalone exe
 | **Windows** | `x86_64` | NVENC (`cuda`, `scale_cuda`), AMD AMF (`vpp_amf`), Intel QSV (`libvpl`, `vpp_qsv`) | `libx264`, `libx265` | `ffmpeg-minimal-win-x86_64.zip` |
 | **macOS** | `arm64` | Apple VideoToolbox (`scale_vt`) | `libx264`, `libx265` | `ffmpeg-minimal-macos-arm64.tar.gz` |
 | **macOS** | `x86_64` | Apple VideoToolbox (`scale_vt`) | `libx264`, `libx265` | `ffmpeg-minimal-macos-x86_64.tar.gz` |
+
+> [!IMPORTANT]
+> - **NVENC needs NVIDIA driver 610.0 or newer** in `ffmpeg-n9.0.2-r2` and `ffmpeg-n9.1`, which are built against NVENC API 13.1. GTX 900 and 10 series cards end at driver 580, so NVENC does not work on them with these builds.
+> - **Linux builds are not fully static:** they need glibc 2.38 or newer and a matching `libstdc++` (for example Ubuntu 24.04 or Debian 13, not Ubuntu 22.04 or Debian 12), plus `zlib`, `libva2`, `libva-drm2` and `libdrm2`, even when VA-API is not used.
 
 ## HDR to SDR Tone Mapping
 
@@ -45,9 +49,9 @@ Every build can decode AV1 sources (output stays H.264 or HEVC): software decodi
 ## Automation
 
 - Checks for new stable FFmpeg release tags (`n*`) every Sunday at 12:00 PM IST (06:30 UTC).
-- Automatically skips rebuilding if a GitHub Release for the current stable tag already exists.
+- Scheduled runs skip rebuilding if a GitHub Release for the current stable tag already exists.
 - Publishes pre-built archives as GitHub Release assets tagged `ffmpeg-<tag>`.
-- Each build job verifies that the required hardware filters exist in the built binary and fails otherwise.
+- Each build job verifies that the required filters, the `libdav1d` decoder and the `h264_mp4toannexb` bitstream filter exist in the built binary and fails otherwise.
 - Releases are never overwritten. Running the workflow manually from `main` for an FFmpeg version that is already released publishes the next revision automatically (`ffmpeg-n9.0.2` → `ffmpeg-n9.0.2-r2` → `-r3` …). The optional `release_revision` input (e.g. `r5`) picks a specific revision instead; the run fails if that revision already exists.
 - Manual runs from other branches build and verify the binaries but publish nothing.
 
