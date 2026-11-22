@@ -22,7 +22,7 @@ These builds serve as the upstream binary provider bundled inside standalone exe
 
 ## HDR to SDR Tone Mapping
 
-Every build includes `zscale` (from [zimg](https://github.com/sekrit-twc/zimg), linked statically) and `tonemap`, so HDR10 and HLG sources can be converted to SDR BT.709 on the CPU with any encoder. Example for HDR10 (PQ); for HLG, drop `:npl=100`:
+Every build includes `zscale` (from [zimg](https://github.com/sekrit-twc/zimg), linked statically) and `tonemap`, so HDR10 and HLG sources can be converted to SDR BT.709 on the CPU with any encoder. Example for HDR10 (PQ); for HLG, add `:agamma=0` to the first `zscale` (`zscale=t=linear:npl=100:agamma=0`), otherwise saturated colors shift:
 
 ```bash
 ffmpeg -i hdr.mp4 -vf "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p" -c:v libx265 sdr.mp4
